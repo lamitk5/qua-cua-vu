@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
+  <title>💖 Trái Tim 20/10 💖</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap');
+    *{margin:0;padding:0;box-sizing:border-box}
+    html,body{width:100%;height:100%;background:#05000a;overflow:hidden;touch-action:none;
+              font-family:'Quicksand','Segoe UI',sans-serif}
+    canvas{display:block;position:fixed;top:0;left:0}
+    #ui{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;
+        display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+        padding-bottom:max(20px,3vh);z-index:10}
+    #title{font-size:clamp(17px,4.2vw,32px);font-weight:700;letter-spacing:4px;color:#fff;
+           text-transform:uppercase;
+           text-shadow:0 0 12px #ff69b4,0 0 32px #ff2d75,0 0 60px #ff2d7588;
+           animation:tp 2.4s ease-in-out infinite}
+    @keyframes tp{
+      0%,100%{opacity:1;transform:translateY(0) scale(1)}
+      50%{opacity:.88;transform:translateY(-2px) scale(1.02);
+          text-shadow:0 0 22px #ff9ad5,0 0 55px #ff2d75,0 0 100px #ff2d75aa}
+    }
+    #hint{margin-top:8px;font-size:clamp(11px,2vw,14px);color:rgba(255,190,210,.55);
+          letter-spacing:1.6px;animation:hb 2.4s ease-in-out infinite}
+    @keyframes hb{0%,100%{opacity:.55}50%{opacity:.9}}
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <div id="title">💖 Chúc Mừng 20/10 💖</div>
+  <div id="hint">Chạm / Click để trái tim đập mạnh hơn ✨</div>
+</div>
+<script>
+// ─── SETUP ──────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d', { alpha: false, desynchronized: true });
+ctx.imageSmoothingEnabled = false;
+let W, H, CX, CY, SCALE;
+
+function resize(){
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  CX = W/2; CY = H/2;
+  // Leave room for title bar; smaller heart = fewer text rows = smoother FPS
+  SCALE = Math.min(W,H)/760;
+  buildHeartPath();
+  buildGlowCanvas();
+  rebuildTextRows();
+  initBorderDots();
+  initPetals();
+  initTwinkles();
+  initBlooms();
+}
+window.addEventListener('resize', resize);
+
+// ─── WISHES ─────────────────────────────────────────────────────────────────
+const WISHES = [
+  "Chuc em 20/10 luon xinh dep rang ro 🌸",
+  "Mong em mai vui ve va hanh phuc 💕",
+  "Cam on vi da luon ben anh 🥰",
+  "An ngon ngu ngon khong lo au nhe 🌙",
+  "Moi ngay deu la mot ngay tuyet voi ✨",
+  "Luon duoc yeu thuong va chieu chuong 💗",
+  "Mai giu nu cuoi tren moi nhe 😊",
+  "Yeu em nhieu hon moi ngay 💖",
+  "Em la dieu tuyet voi nhat cua anh 🌟",
+  "Mong moi dieu em mo deu thanh that 🦋",
+  "Hanh phuc mai mai ben em 💞",
+  "Em toa sang hon bat ky ngoi sao nao 🌠",
+  "Cam on em da la mot phan doi anh 🍀",
+  "Mong em khoe manh va binh an 🌷",
+  "Luon tu hao vi co em 💝",
+  "Em xung dang duoc yeu thuong nhat 👑",
+  "Moi khoanh khac ben em la qua tang 🎁",
+  "Yeu em tu hom nay den mai mai ♾️",
+  "Em lam moi thu tro nen y nghia hon 🌈",
+  "Chuc em luon tran day nang luong 🌻",
+  "Anh yeu em! Happy 20/10 💋",
+  "Em la anh nang moi buoi sang cua anh ☀️",
+  "Trai tim anh chi co cho cho em 💓",
+  "Mai la nguoi con gai anh yeu nhat 💘",
+];
+
+// ─── HEART MATH ─────────────────────────────────────────────────────────────
+function heartXY(t, size){
+  const x =  16 * Math.pow(Math.sin(t), 3);
+  const y = -(13*Math.cos(t) - 5*Math.cos(2*t) - 2*Math.cos(3*t) - Math.cos(4*t));
+  return { x: x*size, y: y*size };
+}
+
+// Pre-sample heart contour points once (used for border particles)
+let heartPoints = [];
+let heartPath2D = null;
+
+function buildHeartPath(){
+  const hs = SCALE * 18;
+  heartPath2D = new Path2D();
+  heartPoints = [];
+  const N = 280;
+  for(let i=0; i<=N; i++){
+    const t = (i/N)*Math.PI*2;
+    const p = heartXY(t, hs);
+    const px = CX+p.x, py = CY+p.y;
+    if(i===0) heartPath2D.moveTo(px, py);
+    else       heartPath2D.lineTo(px, py);
+    if(i<N) heartPoints.push({x:px - CX, y:py - CY, t}); // relative to center
+  }
+  heartPath2D.closePath();
+}
+
+// ─── GLOW RING (tight offscreen — rebuilt on resize only) ───────────────────
+// Only as big as the heart + blur padding (not full viewport).
+let glowCanvas = null;
+let glowOX = 0, glowOY = 0; // top-left of glow canvas in screen space
+
+function buildGlowCanvas(){
+  const hs = SCALE * 18;
+  const pad = Math.ceil(SCALE * 55);
+  const gw = Math.ceil(hs * 32 + pad * 2);
+  const gh = Math.ceil(hs * 34 + pad * 2);
+  glowOX = Math.round(CX - gw / 2);
+  glowOY = Math.round(CY - gh / 2);
+
+  glowCanvas = document.createElement('canvas');
+  glowCanvas.width  = gw;
+  glowCanvas.height = gh;
+  const gc = glowCanvas.getContext('2d');
+
+  // Local path centered in this small canvas
+  const path = new Path2D();
+  const N = 280;
+  for(let i = 0; i <= N; i++){
+    const p = heartXY((i / N) * Math.PI * 2, hs);
+    const px = gw / 2 + p.x, py = gh / 2 + p.y;
+    if(i === 0) path.moveTo(px, py);
+    else path.lineTo(px, py);
+  }
+  path.closePath();
+
+  const layers = [
+    {blur:36, alpha:0.35, color:'#ff2d75'},
+    {blur:18, alpha:0.55, color:'#ff69b4'},
+    {blur: 7, alpha:0.70, color:'#ffaacc'},
+    {blur: 2, alpha:0.90, color:'#ffffff'},
+  ];
+  for(const l of layers){
+    gc.save();
+    gc.shadowColor = l.color;
+    gc.shadowBlur  = l.blur;
+    gc.strokeStyle = l.color;
+    gc.globalAlpha = l.alpha;
+    gc.lineWidth   = SCALE * 3;
+    gc.stroke(path);
+    gc.restore();
+  }
+}
+
+// ─── RADIAL LIGHT STREAKS (warp / dải sáng như ảnh mẫu) ─────────────────────
+// Dense center→edge trails. Batched by color (3 strokes) for FPS.
+const STREAK_COUNT = 220;
+const STREAK_COLORS = [
+  '#ffffff', '#ffe8f4', '#ffc0dc',
+  '#e8f4ff', '#b8e0ff', '#d4c0ff',
+  '#ff9ec8', '#fff5fa',
+];
+const streaks = [];
+let streakMaxR = 800;
+
+function newStreak(aged){
+  const angle = Math.random() * Math.PI * 2;
+  const maxR = streakMaxR;
+  // Start near heart edge so trails burst out like the reference
+  const r0 = aged
+    ? (0.12 + Math.random() * 0.85) * maxR
+    : (0.08 + Math.random() * 0.12) * maxR;
+  return {
+    angle,
+    r: r0,
+    // Faster when farther → long outer dashes
+    speed: 1.2 + Math.random() * 5.5,
+    lenMul: 6 + Math.random() * 14,
+    bright: 0.35 + Math.random() * 0.65,
+    color: STREAK_COLORS[(Math.random() * STREAK_COLORS.length) | 0],
+    width: Math.random() < 0.15 ? 1.6 : (Math.random() < 0.4 ? 1.1 : 0.7),
+  };
+}
+
+function initStars(){
+  streakMaxR = Math.hypot(W || 800, H || 600) * 0.72;
+  streaks.length = 0;
+  for(let i = 0; i < STREAK_COUNT; i++) streaks.push(newStreak(true));
+}
+
+function drawStars(){
+  streakMaxR = Math.hypot(W, H) * 0.72;
+  const maxR = streakMaxR;
+  ctx.lineCap = 'round';
+
+  for(let i = 0; i < streaks.length; i++){
+    const s = streaks[i];
+    const oldR = s.r;
+    s.r += s.speed * (1 + s.r / 380);
+    if(s.r > maxR){
+      streaks[i] = newStreak(false);
+      continue;
+    }
+
+    const cos = Math.cos(s.angle), sin = Math.sin(s.angle);
+    // Longer outer dashes — giống dải sáng trong ảnh
+    const len = Math.max(4, (s.r - oldR) * s.lenMul + s.r * 0.055);
+    const r1 = Math.max(0, s.r - len);
+    const x1 = CX + cos * r1, y1 = CY + sin * r1;
+    const x2 = CX + cos * s.r, y2 = CY + sin * s.r;
+
+    const fade = Math.min(1, (s.r / maxR) * 2.4) * s.bright;
+    if(fade < 0.05) continue;
+
+    ctx.strokeStyle = s.color;
+    ctx.globalAlpha = fade * 0.9;
+    ctx.lineWidth = s.width;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+
+  ctx.globalAlpha = 1;
+  ctx.lineCap = 'butt';
+}
+
+// ─── BORDER DOTS ────────────────────────────────────────────────────────────
+// Fewer particles, NO per-particle shadowBlur.
+// Glow comes entirely from glowCanvas composited separately.
+const BORDER_N = 150;
+const bdots = [];
+const sparkles = [];
+const MAX_SPARKLES = 60;
+
+function initBorderDots(){
+  bdots.length = 0;
+  if(!heartPoints.length) return;
+  const step = Math.max(1, Math.floor(heartPoints.length / BORDER_N));
+  for(let i=0;i<BORDER_N;i++){
+    const idx = (i*step) % heartPoints.length;
+    bdots.push({
+      idx,
+      phase: Math.random()*Math.PI*2,
+      speed: 0.5 + Math.random()*1.5,
+      size:  Math.random()*2.2+0.6,
+      color: Math.random()<0.3 ? '#ff6688' : `hsl(${330+Math.random()*30},85%,75%)`,
+      hue:   Math.random()<0.3 ? 0 : 340,
+      spkT:  Math.random()*120,
+      breathAmp: (Math.random()-0.5)*SCALE*4,
+    });
+  }
+}
+
+function drawBorderDots(time, pulse){
+  const scale = 1 + pulse*0.07;
+  const szMul = 1 + pulse*0.25;
+  ctx.globalAlpha = 0.85 + pulse*0.12;
+
+  for(let i=0;i<bdots.length;i++){
+    const d = bdots[i];
+    const p = heartPoints[d.idx];
+    const br = Math.sin(time*d.speed + d.phase)*d.breathAmp;
+    const nx = CX + p.x*scale + br*Math.cos(p.t+Math.PI);
+    const ny = CY + p.y*scale + br*Math.sin(p.t+Math.PI);
+
+    ctx.fillStyle = d.color;
+    ctx.beginPath();
+    ctx.arc(nx, ny, d.size*szMul, 0, Math.PI*2);
+    ctx.fill();
+
+    d.spkT--;
+    if(d.spkT <= 0 && sparkles.length < MAX_SPARKLES){
+      d.spkT = 120 + Math.random()*220;
+      const ang = Math.random()*Math.PI*2;
+      const spd = Math.random()*2+0.5;
+      sparkles.push({x:nx,y:ny,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd,
+        life:30+Math.random()*20, maxLife:55, size:Math.random()*1.3+0.3, hue:d.hue});
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawSparkles(){
+  for(let i=sparkles.length-1;i>=0;i--){
+    const s=sparkles[i];
+    s.x+=s.vx; s.y+=s.vy; s.vx*=0.95; s.vy*=0.95; s.life--;
+    if(s.life<=0){sparkles.splice(i,1);continue}
+    ctx.globalAlpha = (s.life/s.maxLife)*0.8;
+    ctx.fillStyle   = `hsl(${s.hue},90%,90%)`;
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.size,0,Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha=1;
+}
+
+// ─── SPRITES (pre-rendered hearts / petals — cheap drawImage) ───────────────
+let heartSprite = null;
+let petalSprite = null;
+
+function buildSprites(){
+  // Mini heart
+  const hs = document.createElement('canvas');
+  hs.width = hs.height = 32;
+  const hc = hs.getContext('2d');
+  hc.translate(16, 17);
+  hc.beginPath();
+  for(let i=0;i<=40;i++){
+    const t=(i/40)*Math.PI*2;
+    const x=16*Math.pow(Math.sin(t),3);
+    const y=-(13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t));
+    if(i===0) hc.moveTo(x*0.55, y*0.55);
+    else hc.lineTo(x*0.55, y*0.55);
+  }
+  hc.closePath();
+  const hg = hc.createRadialGradient(0,-2,0,0,0,12);
+  hg.addColorStop(0,'#ffd0e4');
+  hg.addColorStop(0.55,'#ff4d8d');
+  hg.addColorStop(1,'#c01050');
+  hc.fillStyle = hg;
+  hc.fill();
+  heartSprite = hs;
+
+  // Soft petal
+  const ps = document.createElement('canvas');
+  ps.width = 24; ps.height = 32;
+  const pc = ps.getContext('2d');
+  pc.translate(12, 16);
+  pc.beginPath();
+  pc.moveTo(0, -12);
+  pc.bezierCurveTo(10,-8, 10,8, 0,14);
+  pc.bezierCurveTo(-10,8, -10,-8, 0,-12);
+  const pg = pc.createLinearGradient(-6,-12,6,14);
+  pg.addColorStop(0,'#ffe0ef');
+  pg.addColorStop(0.5,'#ff8ab8');
+  pg.addColorStop(1,'#ff5a9a');
+  pc.fillStyle = pg;
+  pc.globalAlpha = 0.9;
+  pc.fill();
+  pc.strokeStyle = 'rgba(255,255,255,0.35)';
+  pc.lineWidth = 0.6;
+  pc.beginPath();
+  pc.moveTo(0,-10); pc.lineTo(0,12);
+  pc.stroke();
+  petalSprite = ps;
+}
+
+// ─── BLOOMING FLOWERS (hoa nở) ───────────────────────────────────────────────
+const blooms = [];
+const MAX_BLOOMS = 14;
+const BLOOM_COLORS = [
+  { petal:['#ffe4f0','#ff7eb3','#ff3d7f'], center:['#fff6a0','#ffb020'] },
+  { petal:['#fff0f8','#ff9ec8','#e84a8a'], center:['#ffe680','#ff9800'] },
+  { petal:['#ffe8ff','#e090ff','#c44dff'], center:['#fff3a8','#ffc107'] },
+  { petal:['#fff5f0','#ffb4a2','#ff6b6b'], center:['#fff8c0','#ffd54f'] },
+];
+
+function easeOutBack(t){
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+function clamp01(v){ return v < 0 ? 0 : v > 1 ? 1 : v; }
+
+function spawnBloom(x, y, opts){
+  if(blooms.length >= MAX_BLOOMS) blooms.shift();
+  const o = opts || {};
+  blooms.push({
+    x, y,
+    size: o.size || (0.7 + Math.random()*0.9),
+    rot: Math.random()*Math.PI*2,
+    vr: (Math.random()-0.5)*0.25,
+    petals: 5 + (Math.random()*2|0), // 5 or 6
+    colors: BLOOM_COLORS[(Math.random()*BLOOM_COLORS.length)|0],
+    progress: 0,          // 0 bud → 1 open
+    bloomSp: o.fast ? 1.8+Math.random()*1.2 : 0.55+Math.random()*0.55,
+    sway: Math.random()*Math.PI*2,
+    hold: o.hold != null ? o.hold : 2.5+Math.random()*3,
+    holdT: 0,
+    fade: 0,              // after hold, fade out
+    life: 1,
+    persistent: !!o.persistent,
+  });
+}
+
+function initBlooms(){
+  blooms.length = 0;
+  if(!heartPoints.length) return;
+  // Decor blooms around heart contour
+  const spots = [0.08, 0.18, 0.32, 0.48, 0.62, 0.78, 0.90];
+  for(let i=0;i<spots.length;i++){
+    const p = heartPoints[(spots[i]*heartPoints.length)|0];
+    const outward = 1.12 + (i%2)*0.08;
+    spawnBloom(
+      CX + p.x * outward,
+      CY + p.y * outward,
+      { size: 0.55+Math.random()*0.45, hold: 999, persistent: true }
+    );
+    // Stagger start so they open one after another
+    blooms[blooms.length-1].progress = -i * 0.18;
+  }
+}
+
+function spawnBloomsOnPulse(strong){
+  if(!heartPoints.length) return;
+  const n = strong ? 5 : 2;
+  for(let i=0;i<n;i++){
+    const p = heartPoints[(Math.random()*heartPoints.length)|0];
+    const out = 1.05 + Math.random()*0.2;
+    spawnBloom(
+      CX + p.x * out + (Math.random()-0.5)*SCALE*12,
+      CY + p.y * out + (Math.random()-0.5)*SCALE*12,
+      { size: 0.5+Math.random()*0.7, fast: true, hold: 1.2+Math.random()*1.5 }
+    );
+  }
+}
+
+function drawOneBloom(b, time){
+  // progress can be negative (delay) or >1 (held open)
+  const raw = clamp01(b.progress);
+  const open = raw <= 0 ? 0 : clamp01(easeOutBack(Math.min(1, raw)));
+  if(open <= 0.02 && b.progress < 0) return;
+
+  const base = b.size * SCALE * 16;
+  const budScale = 0.25 + open * 0.75;
+  const petalLen = base * (0.35 + open * 0.95);
+  const petalW = base * (0.22 + open * 0.38);
+  const sway = Math.sin(time * 1.1 + b.sway) * 0.08 * open;
+
+  ctx.save();
+  ctx.translate(b.x, b.y);
+  ctx.rotate(b.rot + sway);
+  ctx.globalAlpha = b.life * (0.55 + open * 0.45);
+
+  // Soft glow under flower
+  if(open > 0.3){
+    const gg = ctx.createRadialGradient(0,0,0,0,0, base*1.4);
+    gg.addColorStop(0, `rgba(255,150,200,${0.22*open*b.life})`);
+    gg.addColorStop(1, 'rgba(255,100,160,0)');
+    ctx.fillStyle = gg;
+    ctx.beginPath();
+    ctx.arc(0, 0, base*1.4, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // Petals
+  const cols = b.colors.petal;
+  for(let i=0;i<b.petals;i++){
+    const ang = (i / b.petals) * Math.PI * 2;
+    // Bud: petals tuck in; open: fan out
+    const tuck = (1 - open) * 0.55;
+    ctx.save();
+    ctx.rotate(ang);
+    ctx.translate(0, -petalLen * (0.35 + open * 0.25));
+    ctx.scale(budScale * (1 - tuck * 0.4), budScale);
+
+    ctx.beginPath();
+    ctx.moveTo(0, petalLen * 0.55);
+    ctx.bezierCurveTo(petalW, petalLen*0.15, petalW, -petalLen*0.45, 0, -petalLen*0.55);
+    ctx.bezierCurveTo(-petalW, -petalLen*0.45, -petalW, petalLen*0.15, 0, petalLen*0.55);
+    ctx.closePath();
+
+    const pg = ctx.createLinearGradient(0, petalLen*0.4, 0, -petalLen*0.5);
+    pg.addColorStop(0, cols[0]);
+    pg.addColorStop(0.45, cols[1]);
+    pg.addColorStop(1, cols[2]);
+    ctx.fillStyle = pg;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Center
+  const cr = base * (0.16 + open * 0.14);
+  const cg = ctx.createRadialGradient(-cr*0.2, -cr*0.2, 0, 0, 0, cr);
+  cg.addColorStop(0, b.colors.center[0]);
+  cg.addColorStop(1, b.colors.center[1]);
+  ctx.fillStyle = cg;
+  ctx.beginPath();
+  ctx.arc(0, 0, cr, 0, Math.PI*2);
+  ctx.fill();
+
+  // Tiny stigma dots when open
+  if(open > 0.7){
+    ctx.fillStyle = 'rgba(255,255,220,0.85)';
+    for(let k=0;k<5;k++){
+      const a = k * 1.256 + time;
+      ctx.beginPath();
+      ctx.arc(Math.cos(a)*cr*0.45, Math.sin(a)*cr*0.45, cr*0.12, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  ctx.restore();
+}
+
+function drawBlooms(dt, time){
+  for(let i=blooms.length-1;i>=0;i--){
+    const b = blooms[i];
+    b.rot += b.vr * dt;
+
+    if(b.progress < 1){
+      b.progress += b.bloomSp * dt;
+      if(b.progress >= 1){
+        b.progress = 1;
+        b.holdT = 0;
+      }
+    } else if(b.persistent){
+      // Gently re-bloom forever: pulse open scale via sway only
+      b.life = 0.85 + 0.15 * Math.sin(time * 0.8 + b.sway);
+    } else {
+      b.holdT += dt;
+      if(b.holdT > b.hold){
+        b.life -= dt * 0.7;
+        if(b.life <= 0){ blooms.splice(i,1); continue; }
+      }
+    }
+
+    drawOneBloom(b, time);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ─── FLOATING PETALS ────────────────────────────────────────────────────────
+const PETAL_N = 18;
+const petals = [];
+
+function initPetals(){
+  petals.length = 0;
+  for(let i=0;i<PETAL_N;i++){
+    petals.push({
+      x: Math.random()* (W||800),
+      y: Math.random()* (H||600),
+      vy: 18 + Math.random()*28,
+      vx: (Math.random()-0.5)*22,
+      rot: Math.random()*Math.PI*2,
+      vr: (Math.random()-0.5)*1.4,
+      size: 0.45 + Math.random()*0.55,
+      alpha: 0.25 + Math.random()*0.4,
+      sway: Math.random()*Math.PI*2,
+      swaySp: 0.6 + Math.random()*1.2,
+    });
+  }
+}
+
+function drawPetals(dt, time){
+  if(!petalSprite) return;
+  for(let i=0;i<petals.length;i++){
+    const p = petals[i];
+    p.sway += dt * p.swaySp;
+    p.x += (p.vx + Math.sin(p.sway)*28) * dt;
+    p.y += p.vy * dt;
+    p.rot += p.vr * dt;
+    if(p.y > H + 40){ p.y = -30; p.x = Math.random()*W; }
+    if(p.x < -40) p.x = W+20;
+    if(p.x > W+40) p.x = -20;
+    const s = p.size * (12 + SCALE*6);
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    ctx.globalAlpha = p.alpha * (0.75 + 0.25*Math.sin(time + p.sway));
+    ctx.drawImage(petalSprite, -s*0.4, -s*0.55, s*0.8, s*1.1);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ─── FLOATING MINI HEARTS ───────────────────────────────────────────────────
+const floatHearts = [];
+const MAX_FLOAT_HEARTS = 28;
+
+function spawnFloatHearts(n, fromPulse){
+  const count = Math.min(n, MAX_FLOAT_HEARTS - floatHearts.length);
+  for(let i=0;i<count;i++){
+    const ang = -Math.PI/2 + (Math.random()-0.5)*1.4;
+    const sp = fromPulse ? 40+Math.random()*70 : 20+Math.random()*40;
+    floatHearts.push({
+      x: CX + (Math.random()-0.5)*SCALE*80,
+      y: CY + SCALE*40 + Math.random()*SCALE*30,
+      vx: Math.cos(ang)*sp*(0.3+Math.random()*0.5),
+      vy: Math.sin(ang)*sp - 30,
+      life: 1,
+      decay: 0.35 + Math.random()*0.45,
+      size: 0.35 + Math.random()*0.55,
+      rot: (Math.random()-0.5)*0.8,
+      vr: (Math.random()-0.5)*2,
+    });
+  }
+}
+
+function drawFloatHearts(dt){
+  if(!heartSprite) return;
+  for(let i=floatHearts.length-1;i>=0;i--){
+    const h = floatHearts[i];
+    h.x += h.vx * dt;
+    h.y += h.vy * dt;
+    h.vy -= 25 * dt; // float up
+    h.vx *= 0.99;
+    h.rot += h.vr * dt;
+    h.life -= h.decay * dt;
+    if(h.life <= 0){ floatHearts.splice(i,1); continue; }
+    const s = h.size * (14 + SCALE*8);
+    ctx.save();
+    ctx.translate(h.x, h.y);
+    ctx.rotate(h.rot);
+    ctx.globalAlpha = Math.min(1, h.life) * 0.85;
+    ctx.drawImage(heartSprite, -s/2, -s/2, s, s);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ─── HEARTBEAT RINGS ────────────────────────────────────────────────────────
+const rings = [];
+
+function spawnRing(strong){
+  rings.push({
+    r: SCALE * 40,
+    maxR: SCALE * (strong ? 280 : 200),
+    life: 1,
+    w: strong ? 3.2 : 2.2,
+  });
+  if(rings.length > 5) rings.shift();
+}
+
+function drawRings(dt){
+  for(let i=rings.length-1;i>=0;i--){
+    const r = rings[i];
+    r.r += (r.maxR - r.r) * Math.min(1, dt * 2.8);
+    r.life -= dt * 0.85;
+    if(r.life <= 0){ rings.splice(i,1); continue; }
+    ctx.beginPath();
+    ctx.arc(CX, CY, r.r, 0, Math.PI*2);
+    ctx.strokeStyle = `rgba(255,120,180,${r.life * 0.45})`;
+    ctx.lineWidth = r.w * r.life;
+    ctx.stroke();
+  }
+}
+
+// ─── SOFT AURORA RIBBONS (behind heart) ─────────────────────────────────────
+function drawAurora(time){
+  const bands = 3;
+  for(let b=0;b<bands;b++){
+    const y0 = CY - SCALE*90 + b*SCALE*55;
+    ctx.beginPath();
+    for(let x=0;x<=W;x+=14){
+      const y = y0
+        + Math.sin(x*0.004 + time*0.55 + b*1.7)*SCALE*28
+        + Math.sin(x*0.01 + time*0.9 + b)*SCALE*12;
+      if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.strokeStyle = b%2===0
+      ? `rgba(255,60,140,${0.07 + 0.03*Math.sin(time+b)})`
+      : `rgba(180,80,255,${0.05 + 0.025*Math.sin(time*0.7+b)})`;
+    ctx.lineWidth = SCALE * (18 + b*6);
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }
+}
+
+// ─── TWINKLE DUST ───────────────────────────────────────────────────────────
+const TWINKLE_N = 40;
+const twinkles = [];
+
+function initTwinkles(){
+  twinkles.length = 0;
+  for(let i=0;i<TWINKLE_N;i++){
+    twinkles.push({
+      x: Math.random(),
+      y: Math.random(),
+      phase: Math.random()*Math.PI*2,
+      speed: 1.2 + Math.random()*2.5,
+      size: 0.6 + Math.random()*1.4,
+    });
+  }
+}
+
+function drawTwinkles(time){
+  for(let i=0;i<twinkles.length;i++){
+    const t = twinkles[i];
+    const a = 0.15 + 0.55 * Math.abs(Math.sin(time*t.speed + t.phase));
+    ctx.globalAlpha = a;
+    ctx.fillStyle = '#ffe8f2';
+    ctx.beginPath();
+    ctx.arc(t.x*W, t.y*H, t.size, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ─── INNER HEART WASH (under text) ──────────────────────────────────────────
+function drawHeartWash(pulse){
+  if(!heartPath2D) return;
+  ctx.save();
+  ctx.clip(heartPath2D);
+  const g = ctx.createRadialGradient(CX, CY - SCALE*20, 0, CX, CY, SCALE*200);
+  g.addColorStop(0,   `rgba(255,70,140,${0.18 + pulse*0.12})`);
+  g.addColorStop(0.55,`rgba(120,0,60,${0.10 + pulse*0.06})`);
+  g.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(CX - SCALE*220, CY - SCALE*220, SCALE*440, SCALE*440);
+  ctx.restore();
+}
+
+// ─── ANIMATED TEXT ──────────────────────────────────────────────────────────
+// Pre-render wish strip once → drawImage each frame (cheap).
+// Y range sampled from real heart curve so text fills tip → lobes.
+const SCROLL_PX_S = 22;
+let textRows     = [];
+let textTileCvs  = null;
+let textTileW    = 1;
+let textTileH    = 1;
+let textFontSize = 12;
+let shimPhase    = 0;
+
+function rebuildTextRows(){
+  if(!heartPath2D) return;
+  textRows = [];
+  const hs = SCALE*18;
+  textFontSize = Math.max(10, Math.round(SCALE*11));
+  const lh = Math.round(textFontSize * 1.55);
+
+  // Actual heart Y extents from parametric curve (canvas coords)
+  let minY = Infinity, maxY = -Infinity;
+  for(let i=0;i<=360;i++){
+    const p = heartXY((i/360)*Math.PI*2, hs);
+    const py = CY + p.y;
+    if(py < minY) minY = py;
+    if(py > maxY) maxY = py;
+  }
+  // Fill tip→lobes; tiny inset only
+  const topY = minY + lh * 0.15;
+  const botY = maxY - lh * 0.15;
+
+  // Short tiles (6 wishes) keep drawImage cheap; rows stagger which chunk
+  const SEP = '  ·  ';
+  const CHUNK = 6;
+  const measure = document.createElement('canvas').getContext('2d');
+  measure.font = `600 ${textFontSize}px 'Segoe UI',sans-serif`;
+
+  const tiles = [];
+  for(let c = 0; c < WISHES.length; c += CHUNK){
+    const chunk = WISHES.slice(c, c + CHUNK);
+    const str = chunk.join(SEP) + SEP;
+    const tw = Math.ceil(measure.measureText(str).width);
+    const cvs = document.createElement('canvas');
+    cvs.width = tw;
+    cvs.height = Math.ceil(lh);
+    const tc = cvs.getContext('2d');
+    tc.font = `600 ${textFontSize}px 'Segoe UI',sans-serif`;
+    tc.textBaseline = 'middle';
+    tc.fillStyle = '#ffc0d8';
+    tc.fillText(str, 0, cvs.height * 0.52);
+    tiles.push({ cvs, tw });
+  }
+
+  // Keep a default reference for scroll math
+  textTileCvs = tiles[0].cvs;
+  textTileW = tiles[0].tw;
+  textTileH = tiles[0].cvs.height;
+
+  const heartHalfX = hs * 16;
+
+  let row = 0;
+  for(let y = topY; y <= botY - lh * 0.5; y += lh){
+    const t = tiles[row % tiles.length];
+    textRows.push({
+      y,
+      dir:     (row % 2 === 0) ? 1 : -1,
+      scrollX: (row * 97) % t.tw,
+      alpha:   0.72 + (row % 5) * 0.045,
+      wvSeed:  row * 0.52,
+      halfW:   heartHalfX * 1.02,
+      tile:    t.cvs,
+      tw:      t.tw,
+    });
+    row++;
+  }
+}
+
+function drawTextRows(dt, time, pulse){
+  if(!textRows.length) return;
+
+  shimPhase = (shimPhase + dt / 3.5) % 1;
+  const shimX = shimPhase * (W * 1.5) - W * 0.25;
+  const shimW = W * 0.28;
+  const baseA = 0.88 + pulse * 0.1;
+
+  for(let i = 0; i < textRows.length; i++){
+    const r = textRows[i];
+    const tw = r.tw;
+    r.scrollX = (r.scrollX + SCROLL_PX_S * dt) % tw;
+
+    const drawY = r.y + Math.sin(time * 1.05 + r.wvSeed) * SCALE * 1.8;
+    ctx.globalAlpha = Math.min(1, r.alpha * baseA);
+
+    // Cover heart width only (~3–5 short tiles)
+    const shift = r.scrollX * r.dir;
+    const left  = CX - r.halfW;
+    const right = CX + r.halfW;
+    let x = left - ((left - (CX + shift)) % tw + tw) % tw;
+    // One extra tile on each side for seamless scroll edges
+    for(x -= tw; x < right + tw; x += tw){
+      ctx.drawImage(r.tile, x, drawY);
+    }
+  }
+
+  if(shimX + shimW > 0 && shimX - shimW < W){
+    const g = ctx.createLinearGradient(shimX - shimW, 0, shimX + shimW, 0);
+    g.addColorStop(0,   'rgba(255,255,255,0)');
+    g.addColorStop(0.5, 'rgba(255,255,255,0.12)');
+    g.addColorStop(1,   'rgba(255,255,255,0)');
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ─── PULSE ──────────────────────────────────────────────────────────────────
+let pulse=0, pTime=0;
+function triggerPulse(){pulse=1;pTime=0;}
+
+function onInteract(e){
+  e.preventDefault(); triggerPulse();
+  spawnRing(true);
+  spawnFloatHearts(10, true);
+  spawnBloomsOnPulse(true);
+  const n = Math.min(20, MAX_SPARKLES - sparkles.length);
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, sp=Math.random()*5+1.5;
+    sparkles.push({x:CX,y:CY,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,
+      life:55+Math.random()*30, maxLife:90, size:Math.random()*2.5+0.8,
+      hue:Math.random()<0.5?340:0});
+  }
+}
+canvas.addEventListener('click',      onInteract);
+canvas.addEventListener('touchstart', onInteract, {passive:false});
+
+// ─── MAIN LOOP ───────────────────────────────────────────────────────────────
+let lastTs=0, time=0;
+
+function animate(ts){
+  requestAnimationFrame(animate);
+  const dt = Math.min((ts-lastTs)/1000, 0.05);
+  lastTs=ts; time+=dt;
+
+  // Pulse decay
+  if(pulse>0){ pTime+=dt; pulse=Math.max(0, 1-pTime*2.6); }
+
+  // Auto heartbeat every 1.8s (double-beat feel)
+  const beatT = time % 1.8;
+  let ap = 0;
+  if(beatT < 0.11) ap = Math.sin(beatT/0.11*Math.PI)*0.38;
+  else if(beatT > 0.22 && beatT < 0.34) ap = Math.sin((beatT-0.22)/0.12*Math.PI)*0.26;
+  const tp = Math.max(pulse, ap);
+
+  // Trigger ring + tiny hearts + bloom on auto beat peak
+  if(beatT < 0.02 && (!animate._lastBeat || time - animate._lastBeat > 1.5)){
+    animate._lastBeat = time;
+    spawnRing(false);
+    spawnFloatHearts(3, false);
+    spawnBloomsOnPulse(false);
+  }
+
+  // ── BG ──────────────────────────────────────────────────────────────────
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#05000a';
+  ctx.fillRect(0, 0, W, H);
+
+  // Soft vignette corners
+  const vig = ctx.createRadialGradient(CX, CY, Math.min(W,H)*0.25, CX, CY, Math.max(W,H)*0.72);
+  vig.addColorStop(0, 'rgba(40,0,28,0)');
+  vig.addColorStop(1, 'rgba(0,0,0,0.55)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, W, H);
+
+  drawAurora(time);
+  drawTwinkles(time);
+  drawStars();
+  ctx.globalAlpha = 1;
+
+  // ── HEART GLOW AMBIENT ───────────────────────────────────────────────────
+  const hs = SCALE * 18 * (1 + tp * 0.07);
+  const glowR = hs * 13 * (1 + tp * 0.1);
+  const hgr = ctx.createRadialGradient(CX, CY - hs * 1.5, 0, CX, CY, glowR);
+  hgr.addColorStop(0,    `rgba(255,45,117,${0.18 + tp * 0.24})`);
+  hgr.addColorStop(0.45, `rgba(180,0,80,${0.10 + tp * 0.10})`);
+  hgr.addColorStop(1,    'rgba(0,0,0,0)');
+  ctx.fillStyle = hgr;
+  ctx.fillRect(CX - glowR, CY - glowR, glowR * 2, glowR * 2);
+
+  drawHeartWash(tp);
+
+  // ── TEXT (clipped to heart) ───────────────────────────────────────────────
+  ctx.save();
+  ctx.clip(heartPath2D);
+  ctx.globalAlpha = 1;
+  drawTextRows(dt, time, tp);
+  ctx.restore();
+
+  // ── GLOW RING ────────────────────────────────────────────────────────────
+  if(glowCanvas){
+    const glowScale = 1 + tp * 0.055;
+    const gw = glowCanvas.width, gh = glowCanvas.height;
+    ctx.save();
+    ctx.translate(CX, CY);
+    ctx.scale(glowScale, glowScale);
+    ctx.translate(-gw / 2, -gh / 2);
+    ctx.globalAlpha = 0.82 + tp * 0.18;
+    ctx.drawImage(glowCanvas, 0, 0);
+    ctx.restore();
+  }
+
+  drawRings(dt);
+  drawBorderDots(time, tp);
+  drawSparkles();
+  drawBlooms(dt, time);
+  drawPetals(dt, time);
+  drawFloatHearts(dt);
+
+  // ── BURST FLASH on pulse ─────────────────────────────────────────────────
+  if(tp > 0.06){
+    const brR = hs * 12 * tp;
+    const br = ctx.createRadialGradient(CX, CY, 0, CX, CY, brR);
+    br.addColorStop(0,   `rgba(255,140,200,${tp * 0.45})`);
+    br.addColorStop(0.4, `rgba(255,40,130,${tp * 0.18})`);
+    br.addColorStop(1,   'rgba(0,0,0,0)');
+    ctx.fillStyle = br;
+    ctx.fillRect(CX - brR, CY - brR, brR * 2, brR * 2);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ─── INIT ────────────────────────────────────────────────────────────────────
+buildSprites();
+resize();
+initStars();
+initBorderDots();
+initPetals();
+initTwinkles();
+initBlooms();
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
